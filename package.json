@@ -1,0 +1,34 @@
+{
+  "name": "ai-agent-and-me",
+  "version": "0.1.0",
+  "description": "Aggregate Claude Code / Codex / GitHub Copilot CLI session logs per repository",
+  "bin": {
+    "ai-agent-and-me": "dist/cli.js",
+    "ai-agent-and-me-web": "dist/server.js"
+  },
+  "type": "module",
+  "scripts": {
+    "build": "tsc",
+    "dev": "tsx src/cli.ts",
+    "web": "tsx src/server.ts",
+    "start:web": "node dist/server.js",
+    "start": "node dist/cli.js",
+    "prepublishOnly": "npm run build"
+  },
+  "files": [
+    "dist",
+    "README.md"
+  ],
+  "engines": {
+    "node": ">=20"
+  },
+  "dependencies": {
+    "chalk": "^5.3.0",
+    "commander": "^12.1.0"
+  },
+  "devDependencies": {
+    "@types/node": "^20.14.0",
+    "tsx": "^4.19.0",
+    "typescript": "^5.6.0"
+  }
+}
