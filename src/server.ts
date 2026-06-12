@@ -410,6 +410,13 @@ const INDEX_HTML = String.raw`<!doctype html>
     .session > summary:hover { background: #fafbfc; }
     .s-head { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
     .s-title { font-weight: 700; overflow-wrap: anywhere; }
+    .copy-log {
+      margin-left: auto;
+      padding: 4px 8px;
+      font-size: 12px;
+      line-height: 1.2;
+      white-space: nowrap;
+    }
     .s-meta { color: var(--muted); font-size: 12px; display: flex; flex-wrap: wrap; gap: 10px; }
     .s-preview { color: #475569; font-size: 12.5px; line-height: 1.5; overflow-wrap: anywhere; }
     .hit { background: #fef3c7; color: #92400e; border-color: #fde68a; }
@@ -715,6 +722,75 @@ const INDEX_HTML = String.raw`<!doctype html>
 
     var sessionStore = [];  // flat session data for lazy rendering
 
+    function formatToolPayload(value) {
+      if (value === undefined) return '';
+      return typeof value === 'string' ? value : JSON.stringify(value, null, 2);
+    }
+
+    function formatSessionLog(session) {
+      var lines = [
+        '# AI Agent and Me log',
+        '',
+        'Project: ' + session.repoPath,
+        'Agent: ' + session.agent,
+        'Session: ' + session.sessionId,
+        'Title: ' + sessionTitle(session),
+        'Started: ' + fmtDate(session.startedAt),
+        'Ended: ' + fmtDate(session.endedAt),
+        '',
+        '---',
+        '',
+      ];
+
+      session.turns.forEach(function (turn) {
+        var time = fmtDate(turn.timestamp);
+        if (turn.kind === 'reasoning') {
+          lines.push('[' + time + '] AI reasoning (' + turn.agent + ')');
+          lines.push(turn.text || '');
+        } else if (turn.role === 'tool' || turn.toolCall) {
+          var tc = turn.toolCall || {};
+          lines.push('[' + time + '] Tool: ' + (tc.name || 'tool'));
+          if (tc.input !== undefined) {
+            lines.push('input:');
+            lines.push(formatToolPayload(tc.input));
+          }
+          if (tc.output !== undefined) {
+            lines.push('output:');
+            lines.push(formatToolPayload(tc.output));
+          }
+        } else {
+          var label = turn.role === 'user' ? 'User' : 'Assistant (' + turn.agent + ')';
+          lines.push('[' + time + '] ' + label);
+          lines.push(turn.text || '');
+        }
+        lines.push('');
+      });
+
+      return lines.join('\n').trim() + '\n';
+    }
+
+    async function copyText(text) {
+      if (navigator.clipboard && window.isSecureContext) {
+        try {
+          await navigator.clipboard.writeText(text);
+          return;
+        } catch {
+          // Fall back for browsers that expose Clipboard API but deny writes.
+        }
+      }
+      var ta = document.createElement('textarea');
+      ta.value = text;
+      ta.setAttribute('readonly', '');
+      ta.style.position = 'fixed';
+      ta.style.left = '-9999px';
+      document.body.appendChild(ta);
+      ta.focus();
+      ta.select();
+      var ok = document.execCommand('copy');
+      document.body.removeChild(ta);
+      if (!ok) throw new Error('copy failed');
+    }
+
     function renderSessionCard(session, q) {
       var idx = sessionStore.length;
       sessionStore.push(session);
@@ -728,7 +804,8 @@ const INDEX_HTML = String.raw`<!doctype html>
       }
       return '<details class="session" data-idx="' + idx + '">'
         + '<summary>'
-        + '<div class="s-head"><span class="s-title">' + highlight(sessionTitle(session), q) + '</span></div>'
+        + '<div class="s-head"><span class="s-title">' + highlight(sessionTitle(session), q) + '</span>'
+        + '<button type="button" class="copy-log secondary" data-idx="' + idx + '">ログをコピー</button></div>'
         + '<div class="s-meta">' + meta.join('') + '</div>'
         + '<div class="s-preview">' + highlight(sessionPreview(session, q), q) + '</div>'
         + '</summary>'
@@ -789,6 +866,27 @@ const INDEX_HTML = String.raw`<!doctype html>
     }, true);
 
     els.results.addEventListener('click', function (ev) {
+      var copyBtn = ev.target.closest('button.copy-log');
+      if (copyBtn) {
+        ev.preventDefault();
+        ev.stopPropagation();
+        var session = sessionStore[Number(copyBtn.dataset.idx)];
+        if (!session) return;
+        var oldText = copyBtn.textContent;
+        copyBtn.disabled = true;
+        copyText(formatSessionLog(session)).then(function () {
+          copyBtn.textContent = 'コピーしました';
+        }).catch(function () {
+          copyBtn.textContent = 'コピー失敗';
+        }).finally(function () {
+          window.setTimeout(function () {
+            copyBtn.textContent = oldText;
+            copyBtn.disabled = false;
+          }, 1400);
+        });
+        return;
+      }
+
       var btn = ev.target.closest('button.more');
       if (!btn || !lastData) return;
       var path = btn.dataset.project;
