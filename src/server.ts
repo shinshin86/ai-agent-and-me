@@ -389,6 +389,33 @@ const INDEX_HTML = String.raw`<!doctype html>
     .summary { display: flex; flex-wrap: wrap; gap: 8px; margin: 0 0 14px; color: var(--muted); font-size: 13px; align-items: center; }
     .pill { display: inline-flex; padding: 4px 10px; border-radius: 999px; border: 1px solid var(--line); background: #fff; color: #334155; font-size: 12.5px; }
     .status { color: var(--muted); margin: 10px 0; }
+    .copy-fallback {
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: #fff;
+      padding: 10px;
+      margin: 0 0 14px;
+    }
+    .copy-fallback-head {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 8px;
+      margin-bottom: 8px;
+      font-size: 12.5px;
+      font-weight: 700;
+      color: var(--muted);
+    }
+    .copy-fallback textarea {
+      width: 100%;
+      min-height: 180px;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      padding: 8px;
+      font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+      font-size: 12px;
+      line-height: 1.45;
+    }
 
     .project-group { margin-bottom: 22px; }
     .project-group > .group-head {
@@ -531,6 +558,7 @@ const INDEX_HTML = String.raw`<!doctype html>
       <div class="searchbar">
         <input id="query" type="search" placeholder="選択したプロジェクトの会話を文字列で検索 (Enter)" autocomplete="off">
         <button id="queryButton">検索</button>
+        <button id="copyResults" class="secondary" disabled>結果をコピー</button>
       </div>
       <div class="summary" id="summary"></div>
       <div id="status" class="status"></div>
@@ -552,6 +580,7 @@ const INDEX_HTML = String.raw`<!doctype html>
       reloadProjects: document.getElementById('reloadProjects'),
       query: document.getElementById('query'),
       queryButton: document.getElementById('queryButton'),
+      copyResults: document.getElementById('copyResults'),
       summary: document.getElementById('summary'),
       status: document.getElementById('status'),
       results: document.getElementById('results'),
@@ -769,15 +798,37 @@ const INDEX_HTML = String.raw`<!doctype html>
       return lines.join('\n').trim() + '\n';
     }
 
-    async function copyText(text) {
-      if (navigator.clipboard && window.isSecureContext) {
-        try {
-          await navigator.clipboard.writeText(text);
-          return;
-        } catch {
-          // Fall back for browsers that expose Clipboard API but deny writes.
-        }
-      }
+    function formatSearchResultsLog(data) {
+      var filters = data.filters || {};
+      var lines = [
+        '# AI Agent and Me search results log',
+        '',
+        'Projects: ' + data.summary.projects,
+        'Sessions: ' + data.summary.sessions,
+        'Turns: ' + data.summary.turns,
+      ];
+      if (filters.q) lines.push('Query: ' + filters.q);
+      if (filters.agents) lines.push('Agents: ' + filters.agents.join(', '));
+      if (filters.roles) lines.push('Roles: ' + filters.roles.join(', '));
+      if (filters.since) lines.push('Since: ' + fmtDate(filters.since));
+      if (filters.until) lines.push('Until: ' + fmtDate(filters.until));
+      lines.push('', '---', '');
+
+      data.projects.forEach(function (group) {
+        if (!group.sessions.length) return;
+        lines.push('## ' + group.project.name);
+        lines.push(group.project.path);
+        lines.push('');
+        group.sessions.forEach(function (session) {
+          lines.push(formatSessionLog(session).trim());
+          lines.push('');
+        });
+      });
+
+      return lines.join('\n').trim() + '\n';
+    }
+
+    function copyText(text) {
       var ta = document.createElement('textarea');
       ta.value = text;
       ta.setAttribute('readonly', '');
@@ -786,9 +837,51 @@ const INDEX_HTML = String.raw`<!doctype html>
       document.body.appendChild(ta);
       ta.focus();
       ta.select();
-      var ok = document.execCommand('copy');
+      ta.setSelectionRange(0, ta.value.length);
+      var ok = false;
+      try {
+        ok = document.execCommand('copy');
+      } catch {
+        ok = false;
+      }
       document.body.removeChild(ta);
-      if (!ok) throw new Error('copy failed');
+      if (ok) return Promise.resolve();
+      if (navigator.clipboard && window.isSecureContext) {
+        return navigator.clipboard.writeText(text);
+      }
+      return Promise.reject(new Error('copy failed'));
+    }
+
+    function showCopyFallback(text) {
+      var existing = document.getElementById('copyFallback');
+      if (existing) existing.remove();
+
+      var box = document.createElement('div');
+      box.id = 'copyFallback';
+      box.className = 'copy-fallback';
+
+      var head = document.createElement('div');
+      head.className = 'copy-fallback-head';
+      var title = document.createElement('span');
+      title.textContent = 'コピー用テキスト';
+      var close = document.createElement('button');
+      close.type = 'button';
+      close.className = 'secondary';
+      close.textContent = '閉じる';
+      close.addEventListener('click', function () { box.remove(); });
+      head.appendChild(title);
+      head.appendChild(close);
+
+      var ta = document.createElement('textarea');
+      ta.readOnly = true;
+      ta.value = text;
+
+      box.appendChild(head);
+      box.appendChild(ta);
+      els.results.parentNode.insertBefore(box, els.results);
+      ta.focus();
+      ta.select();
+      ta.setSelectionRange(0, ta.value.length);
     }
 
     function renderSessionCard(session, q) {
@@ -817,6 +910,7 @@ const INDEX_HTML = String.raw`<!doctype html>
       sessionStore = [];
       lastQuery = (data.filters && data.filters.q) || '';
       var q = lastQuery;
+      els.copyResults.disabled = data.summary.sessions === 0;
 
       els.summary.innerHTML = [
         '<span class="pill">プロジェクト: ' + data.summary.projects + '</span>',
@@ -873,11 +967,13 @@ const INDEX_HTML = String.raw`<!doctype html>
         var session = sessionStore[Number(copyBtn.dataset.idx)];
         if (!session) return;
         var oldText = copyBtn.textContent;
+        var text = formatSessionLog(session);
         copyBtn.disabled = true;
-        copyText(formatSessionLog(session)).then(function () {
+        copyText(text).then(function () {
           copyBtn.textContent = 'コピーしました';
         }).catch(function () {
-          copyBtn.textContent = 'コピー失敗';
+          showCopyFallback(text);
+          copyBtn.textContent = 'コピー用に選択';
         }).finally(function () {
           window.setTimeout(function () {
             copyBtn.textContent = oldText;
@@ -927,6 +1023,8 @@ const INDEX_HTML = String.raw`<!doctype html>
       els.status.textContent = 'ログを読み込んでいます...';
       els.results.innerHTML = '';
       els.summary.innerHTML = '';
+      els.copyResults.disabled = true;
+      lastData = null;
 
       try {
         var res = await fetch('/api/sessions?' + params.toString());
@@ -938,6 +1036,7 @@ const INDEX_HTML = String.raw`<!doctype html>
       } catch (err) {
         els.status.textContent = '';
         els.results.innerHTML = '<div class="error">' + escapeHtml(err.message) + '</div>';
+        els.copyResults.disabled = true;
       }
     }
 
@@ -971,6 +1070,23 @@ const INDEX_HTML = String.raw`<!doctype html>
     els.manualPath.addEventListener('keydown', function (ev) { if (ev.key === 'Enter') els.addPath.click(); });
     els.searchButton.addEventListener('click', search);
     els.queryButton.addEventListener('click', search);
+    els.copyResults.addEventListener('click', function () {
+      if (!lastData || !lastData.summary || lastData.summary.sessions === 0) return;
+      var oldText = els.copyResults.textContent;
+      var text = formatSearchResultsLog(lastData);
+      els.copyResults.disabled = true;
+      copyText(text).then(function () {
+        els.copyResults.textContent = 'コピーしました';
+      }).catch(function () {
+        showCopyFallback(text);
+        els.copyResults.textContent = 'コピー用に選択';
+      }).finally(function () {
+        window.setTimeout(function () {
+          els.copyResults.textContent = oldText;
+          els.copyResults.disabled = false;
+        }, 1400);
+      });
+    });
     els.reloadProjects.addEventListener('click', loadProjects);
     els.query.addEventListener('keydown', function (ev) { if (ev.key === 'Enter') search(); });
 
