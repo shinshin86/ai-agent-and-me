@@ -2,6 +2,7 @@ import { readdirSync, existsSync, statSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 import type { CollectOptions, UnifiedSession, UnifiedTurn, Role } from '../core/types.js';
+import { addUniqueString } from '../core/modelInfo.js';
 import { readJsonl } from '../utils/jsonl.js';
 
 const CODEX_SESSIONS_DIR = join(homedir(), '.codex', 'sessions');
@@ -86,6 +87,10 @@ async function readRolloutIfMatching(
   let matched = false;
   const turns: UnifiedTurn[] = [];
   let endedAt: string | undefined;
+  let toolVersion: string | undefined;
+  let provider: string | undefined;
+  const models: string[] = [];
+  const details: string[] = [];
 
   for await (const rec of readJsonl(path)) {
     const type = rec?.type;
@@ -98,12 +103,21 @@ async function readRolloutIfMatching(
       // thread_spawn workers); user-driven sessions have a string source.
       if (payload.source && typeof payload.source === 'object') return null;
       matched = true;
-      sessionId = payload.id ?? '';
+      sessionId = payload.id ?? payload.session_id ?? '';
       startedAt = payload.timestamp ?? ts;
+      if (typeof payload.cli_version === 'string') toolVersion = payload.cli_version;
+      if (typeof payload.model_provider === 'string') provider = payload.model_provider;
       continue;
     }
 
     if (!matched) continue;
+
+    if (type === 'turn_context') {
+      const payload = rec.payload ?? {};
+      addUniqueString(models, payload.model);
+      addUniqueString(details, payload.effort);
+    }
+
     if (!ts) continue;
     const t = new Date(ts);
     if (opts.since && t < opts.since) continue;
@@ -146,6 +160,13 @@ async function readRolloutIfMatching(
     repoPath: opts.repoPath,
     startedAt: startedAt ?? turns[0].timestamp,
     endedAt: endedAt ?? turns[turns.length - 1].timestamp,
+    modelInfo: {
+      toolName: 'Codex',
+      toolVersion,
+      models,
+      provider,
+      details,
+    },
     turns,
   };
 }

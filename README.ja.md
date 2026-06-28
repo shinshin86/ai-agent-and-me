@@ -23,6 +23,7 @@ npm run web
 ai-agent-and-me /path/to/your/repo
 ai-agent-and-me . --agent claude,codex
 ai-agent-and-me . --conversation-only                 # user/assistant のみ表示
+ai-agent-and-me . --first-prompt-only                 # セッションごとの最初の依頼のみ表示
 ai-agent-and-me . --role user,assistant,tool          # ロール指定
 ai-agent-and-me . --today                              # 本日分
 mkdir -p tmp
@@ -41,6 +42,7 @@ ai-agent-and-me . --format json > tmp/sessions.json
 | `--agent <list>` | `claude,codex,copilot` のカンマ区切り | all |
 | `--role <list>` | `user,assistant,tool,system` のカンマ区切り | all |
 | `--conversation-only` | `--role user,assistant` のショートカット | false |
+| `--first-prompt-only` | 各セッションの最初のユーザー依頼のみ表示 | false |
 | `--today` | 本日でフィルタ（ローカルタイムゾーン） | false |
 | `--yesterday` | 昨日でフィルタ（ローカルタイムゾーン） | false |
 | `--date <ymd>` | 特定の 1 日（`YYYY-MM-DD`、ローカル TZ） | なし |

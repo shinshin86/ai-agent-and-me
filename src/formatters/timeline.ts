@@ -1,6 +1,7 @@
 import chalk from 'chalk';
 import type { UnifiedSession, AgentId } from '../core/types.js';
 import { mergeTurns } from '../core/merge.js';
+import { formatModelSummary } from '../core/modelInfo.js';
 
 const agentColor: Record<AgentId, (s: string) => string> = {
   claude: (s) => chalk.magenta(s),
@@ -29,6 +30,8 @@ export function formatTimeline(
   const width = opts.width ?? 120;
   const full = opts.full ?? false;
   const turns = mergeTurns(sessions);
+  const sessionByTurn = new Map<string, UnifiedSession>();
+  for (const s of sessions) sessionByTurn.set(`${s.agent}\0${s.sessionId}`, s);
 
   const paint = (fn: (s: string) => string, s: string) => (useColor ? fn(s) : s);
 
@@ -39,7 +42,18 @@ export function formatTimeline(
   );
   lines.push('');
 
+  let currentSessionKey = '';
   for (const t of turns) {
+    const sessionKey = `${t.agent}\0${t.sessionId}`;
+    if (sessionKey !== currentSessionKey) {
+      currentSessionKey = sessionKey;
+      const session = sessionByTurn.get(sessionKey);
+      if (session) {
+        lines.push(
+          paint(chalk.dim, `# ${session.agent} ${session.sessionId} — ${formatModelSummary(session.modelInfo)}`)
+        );
+      }
+    }
     const ts = t.timestamp.slice(0, 19).replace('T', ' ');
     const agent = paint(agentColor[t.agent], t.agent.padEnd(7));
     const role = paint(roleColor[t.role] ?? ((s) => s), t.role.padEnd(9));

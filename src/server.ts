@@ -83,6 +83,7 @@ function filterSessions(
   sessions: UnifiedSession[],
   roles: Role[],
   includeReasoning: boolean,
+  firstPromptOnly: boolean,
   query: string
 ): FilterResult {
   const roleSet = new Set<Role>(roles);
@@ -92,9 +93,13 @@ function filterSessions(
 
   const filtered: SessionView[] = [];
   for (const session of sessions) {
-    const turns = session.turns.filter(
+    let turns = session.turns.filter(
       (turn) => roleSet.has(turn.role) && (includeReasoning || turn.kind !== 'reasoning')
     );
+    if (firstPromptOnly) {
+      const firstUserTurn = turns.find((turn) => turn.role === 'user' && typeof turn.text === 'string' && turn.text.trim());
+      turns = firstUserTurn ? [firstUserTurn] : [];
+    }
     if (turns.length === 0) continue;
     totalTurns += turns.length;
 
@@ -137,6 +142,7 @@ async function collectForRequest(params: URLSearchParams): Promise<{ status: num
   const agents = parseAgents(params.get('agent'));
   const roles = parseRoles(params);
   const includeReasoning = params.get('reasoning') !== '0';
+  const firstPromptOnly = params.get('firstPromptOnly') === '1';
   const q = params.get('q') ?? '';
 
   const range = resolveDateRange({
@@ -162,7 +168,7 @@ async function collectForRequest(params: URLSearchParams): Promise<{ status: num
       if (agents.includes('copilot')) tasks.push(collectCopilot(opts));
 
       const collected = (await Promise.all(tasks)).flat();
-      const { sessions, totalTurns, matchedTurns } = filterSessions(collected, roles, includeReasoning, q);
+      const { sessions, totalTurns, matchedTurns } = filterSessions(collected, roles, includeReasoning, firstPromptOnly, q);
 
       return {
         project: {
@@ -190,6 +196,7 @@ async function collectForRequest(params: URLSearchParams): Promise<{ status: num
         agents,
         roles,
         reasoning: includeReasoning,
+        firstPromptOnly,
         q,
         since: range.since?.toISOString(),
         until: range.until?.toISOString(),
@@ -345,6 +352,8 @@ const INDEX_HTML = String.raw`<!doctype html>
     .badge.claude { background: #fcefe3; color: #b4540a; }
     .badge.codex { background: #e3f0fc; color: #1d62b4; }
     .badge.copilot { background: #efe7fb; color: #6d3bbf; }
+    .badge.model { background: #dcfce7; color: #166534; }
+    .badge.model.unknown { background: #f1f5f9; color: #64748b; }
     .checks { display: flex; flex-wrap: wrap; gap: 6px; }
     .check {
       display: inline-flex;
@@ -446,6 +455,8 @@ const INDEX_HTML = String.raw`<!doctype html>
     }
     .s-meta { color: var(--muted); font-size: 12px; display: flex; flex-wrap: wrap; gap: 10px; }
     .s-preview { color: #475569; font-size: 12.5px; line-height: 1.5; overflow-wrap: anywhere; }
+    .first-prompt-card { padding: 12px 14px 14px; border-top: 1px solid var(--line); }
+    .first-prompt-label { color: var(--user); font-size: 12px; font-weight: 700; margin-bottom: 5px; }
     .hit { background: #fef3c7; color: #92400e; border-color: #fde68a; }
     .turns { border-top: 1px solid var(--line); padding: 6px 14px 12px; }
 
@@ -535,6 +546,7 @@ const INDEX_HTML = String.raw`<!doctype html>
         <div class="checks">
           <label class="check"><input id="showReasoning" type="checkbox" checked> 思考ログ</label>
           <label class="check"><input id="showTools" type="checkbox"> ツールログ</label>
+          <label class="check"><input id="firstPromptOnly" type="checkbox"> 最初の依頼のみ</label>
         </div>
       </div>
 
@@ -576,6 +588,7 @@ const INDEX_HTML = String.raw`<!doctype html>
       last: document.getElementById('last'),
       showReasoning: document.getElementById('showReasoning'),
       showTools: document.getElementById('showTools'),
+      firstPromptOnly: document.getElementById('firstPromptOnly'),
       searchButton: document.getElementById('searchButton'),
       reloadProjects: document.getElementById('reloadProjects'),
       query: document.getElementById('query'),
@@ -621,6 +634,25 @@ const INDEX_HTML = String.raw`<!doctype html>
       return '<span class="badge ' + escapeHtml(agent) + '">' + escapeHtml(agent) + '</span>';
     }
 
+    function formatModelSummary(modelInfo) {
+      if (!modelInfo) return 'モデル不明';
+      var pieces = [];
+      var tool = modelInfo.toolName || 'ツール不明';
+      if (modelInfo.toolVersion) tool += ' v' + modelInfo.toolVersion;
+      pieces.push(tool);
+      pieces.push(modelInfo.models && modelInfo.models.length ? modelInfo.models.join(', ') : 'モデル不明');
+      if (modelInfo.provider) pieces.push(modelInfo.provider);
+      if (modelInfo.details && modelInfo.details.length) pieces.push(modelInfo.details.join(', '));
+      return pieces.join(' · ');
+    }
+
+    function modelBadge(modelInfo) {
+      var models = modelInfo && modelInfo.models && modelInfo.models.length ? modelInfo.models.join(', ') : '';
+      var label = models || 'モデル不明';
+      var cls = models ? 'badge model' : 'badge model unknown';
+      return '<span class="' + cls + '" title="' + escapeHtml(formatModelSummary(modelInfo)) + '">' + escapeHtml(label) + '</span>';
+    }
+
     /* ---------- project list ---------- */
 
     function renderProjectList() {
@@ -649,6 +681,12 @@ const INDEX_HTML = String.raw`<!doctype html>
     function updateSearchButton() {
       els.searchButton.textContent = selected.size > 0 ? '表示する (' + selected.size + ')' : '表示する';
       els.searchButton.disabled = selected.size === 0;
+    }
+
+    function updateLogModeControls() {
+      var firstOnly = els.firstPromptOnly.checked;
+      els.showReasoning.disabled = firstOnly;
+      els.showTools.disabled = firstOnly;
     }
 
     async function loadProjects() {
@@ -695,11 +733,17 @@ const INDEX_HTML = String.raw`<!doctype html>
 
     function sessionTitle(session) {
       if (session.sessionTitle) return session.sessionTitle;
+      var first = firstUserTurn(session);
+      if (first && first.text) return oneLine(first.text, 70);
+      return session.sessionId;
+    }
+
+    function firstUserTurn(session) {
       for (var i = 0; i < session.turns.length; i++) {
         var t = session.turns[i];
-        if (t.role === 'user' && t.text) return oneLine(t.text, 70);
+        if (t.role === 'user' && t.text) return t;
       }
-      return session.sessionId;
+      return null;
     }
 
     function sessionPreview(session, q) {
@@ -762,6 +806,7 @@ const INDEX_HTML = String.raw`<!doctype html>
         '',
         'Project: ' + session.repoPath,
         'Agent: ' + session.agent,
+        'Tool / model: ' + formatModelSummary(session.modelInfo),
         'Session: ' + session.sessionId,
         'Title: ' + sessionTitle(session),
         'Started: ' + fmtDate(session.startedAt),
@@ -798,6 +843,30 @@ const INDEX_HTML = String.raw`<!doctype html>
       return lines.join('\n').trim() + '\n';
     }
 
+    function formatFirstPromptLog(session) {
+      var first = firstUserTurn(session);
+      var lines = [
+        '# AI Agent and Me first prompt',
+        '',
+        'Project: ' + session.repoPath,
+        'Agent: ' + session.agent,
+        'Tool / model: ' + formatModelSummary(session.modelInfo),
+        'Session: ' + session.sessionId,
+        'Title: ' + sessionTitle(session),
+        'Started: ' + fmtDate(session.startedAt),
+        '',
+        '---',
+        '',
+      ];
+      if (first) {
+        lines.push('[' + fmtDate(first.timestamp) + '] User');
+        lines.push(first.text || '');
+      } else {
+        lines.push('（ユーザープロンプトなし）');
+      }
+      return lines.join('\n').trim() + '\n';
+    }
+
     function formatSearchResultsLog(data) {
       var filters = data.filters || {};
       var lines = [
@@ -810,6 +879,7 @@ const INDEX_HTML = String.raw`<!doctype html>
       if (filters.q) lines.push('Query: ' + filters.q);
       if (filters.agents) lines.push('Agents: ' + filters.agents.join(', '));
       if (filters.roles) lines.push('Roles: ' + filters.roles.join(', '));
+      if (filters.firstPromptOnly) lines.push('Mode: first prompt only');
       if (filters.since) lines.push('Since: ' + fmtDate(filters.since));
       if (filters.until) lines.push('Until: ' + fmtDate(filters.until));
       lines.push('', '---', '');
@@ -820,7 +890,7 @@ const INDEX_HTML = String.raw`<!doctype html>
         lines.push(group.project.path);
         lines.push('');
         group.sessions.forEach(function (session) {
-          lines.push(formatSessionLog(session).trim());
+          lines.push((filters.firstPromptOnly ? formatFirstPromptLog(session) : formatSessionLog(session)).trim());
           lines.push('');
         });
       });
@@ -884,25 +954,36 @@ const INDEX_HTML = String.raw`<!doctype html>
       ta.setSelectionRange(0, ta.value.length);
     }
 
-    function renderSessionCard(session, q) {
+    function renderFirstPromptCard(session, q) {
+      var first = firstUserTurn(session);
+      var body = first ? highlight(first.text || '', q) : '（ユーザープロンプトなし）';
+      var time = first ? ' ' + escapeHtml(fmtDate(first.timestamp)) : '';
+      return '<div class="first-prompt-card">'
+        + '<div class="first-prompt-label">最初の依頼' + time + '</div>'
+        + '<div class="bubble">' + body + '</div>'
+        + '</div>';
+    }
+
+    function renderSessionCard(session, q, firstPromptOnly) {
       var idx = sessionStore.length;
       sessionStore.push(session);
       var meta = [
         agentBadge(session.agent),
+        modelBadge(session.modelInfo),
         '<span>' + escapeHtml(fmtDate(session.startedAt)) + '</span>',
         '<span>' + session.turns.length + ' turns</span>',
       ];
       if (q && session.matchedTurns) {
         meta.push('<span class="pill hit">' + session.matchedTurns + ' 件ヒット</span>');
       }
-      return '<details class="session" data-idx="' + idx + '">'
+      return '<details class="session" data-idx="' + idx + '"' + (firstPromptOnly ? ' open' : '') + '>'
         + '<summary>'
         + '<div class="s-head"><span class="s-title">' + highlight(sessionTitle(session), q) + '</span>'
-        + '<button type="button" class="copy-log secondary" data-idx="' + idx + '">ログをコピー</button></div>'
+        + '<button type="button" class="copy-log secondary" data-idx="' + idx + '">' + (firstPromptOnly ? '最初の依頼をコピー' : 'ログをコピー') + '</button></div>'
         + '<div class="s-meta">' + meta.join('') + '</div>'
         + '<div class="s-preview">' + highlight(sessionPreview(session, q), q) + '</div>'
         + '</summary>'
-        + '<div class="turns"></div>'
+        + (firstPromptOnly ? renderFirstPromptCard(session, q) : '<div class="turns"></div>')
         + '</details>';
     }
 
@@ -910,15 +991,17 @@ const INDEX_HTML = String.raw`<!doctype html>
       sessionStore = [];
       lastQuery = (data.filters && data.filters.q) || '';
       var q = lastQuery;
+      var firstPromptOnly = !!(data.filters && data.filters.firstPromptOnly);
       els.copyResults.disabled = data.summary.sessions === 0;
 
       els.summary.innerHTML = [
         '<span class="pill">プロジェクト: ' + data.summary.projects + '</span>',
         '<span class="pill">セッション: ' + data.summary.sessions + '</span>',
+        firstPromptOnly ? '<span class="pill">最初の依頼のみ</span>' : '',
         q
           ? '<span class="pill hit">ヒット: ' + data.summary.matchedTurns + ' / ' + data.summary.turns + ' turns</span>'
           : '<span class="pill">' + data.summary.turns + ' turns</span>',
-      ].join('');
+      ].filter(Boolean).join('');
 
       if (!data.projects.length || data.summary.sessions === 0) {
         els.results.innerHTML = '<div class="empty">' + (q ? '「' + escapeHtml(q) + '」に一致する会話はありません。' : '表示できるログがありません。') + '</div>';
@@ -932,7 +1015,7 @@ const INDEX_HTML = String.raw`<!doctype html>
           + '<span class="gpath">' + escapeHtml(group.project.path) + '</span>'
           + '<span class="gcount">' + group.summary.sessions + ' sessions</span>'
           + '</div>';
-        var cards = group.sessions.slice(0, PAGE).map(function (s) { return renderSessionCard(s, q); }).join('');
+        var cards = group.sessions.slice(0, PAGE).map(function (s) { return renderSessionCard(s, q, firstPromptOnly); }).join('');
         var rest = group.sessions.length - PAGE;
         var more = rest > 0
           ? '<button class="more secondary" data-shown="' + PAGE + '" data-project="' + escapeHtml(group.project.path) + '">残り ' + rest + ' セッションを表示</button>'
@@ -941,7 +1024,7 @@ const INDEX_HTML = String.raw`<!doctype html>
       }).join('');
 
       // 検索時はセッションが少なければ自動展開して会話をすぐ見られるように
-      if (q && data.summary.sessions <= 3) {
+      if (!firstPromptOnly && q && data.summary.sessions <= 3) {
         els.results.querySelectorAll('details.session').forEach(function (d) { d.open = true; });
       }
     }
@@ -953,6 +1036,7 @@ const INDEX_HTML = String.raw`<!doctype html>
       var details = ev.target;
       if (!details.classList || !details.classList.contains('session') || !details.open) return;
       var turnsEl = details.querySelector('.turns');
+      if (!turnsEl) return;
       if (turnsEl.dataset.rendered) return;
       var session = sessionStore[Number(details.dataset.idx)];
       turnsEl.innerHTML = session.turns.map(function (t) { return renderTurn(t, lastQuery); }).join('');
@@ -967,7 +1051,9 @@ const INDEX_HTML = String.raw`<!doctype html>
         var session = sessionStore[Number(copyBtn.dataset.idx)];
         if (!session) return;
         var oldText = copyBtn.textContent;
-        var text = formatSessionLog(session);
+        var text = lastData && lastData.filters && lastData.filters.firstPromptOnly
+          ? formatFirstPromptLog(session)
+          : formatSessionLog(session);
         copyBtn.disabled = true;
         copyText(text).then(function () {
           copyBtn.textContent = 'コピーしました';
@@ -988,9 +1074,10 @@ const INDEX_HTML = String.raw`<!doctype html>
       var path = btn.dataset.project;
       var group = lastData.projects.find(function (g) { return g.project.path === path; });
       if (!group) return;
+      var firstPromptOnly = !!(lastData.filters && lastData.filters.firstPromptOnly);
       var shown = Number(btn.dataset.shown);
       var next = group.sessions.slice(shown, shown + PAGE)
-        .map(function (s) { return renderSessionCard(s, lastQuery); }).join('');
+        .map(function (s) { return renderSessionCard(s, lastQuery, firstPromptOnly); }).join('');
       btn.insertAdjacentHTML('beforebegin', next);
       var newShown = shown + PAGE;
       if (newShown >= group.sessions.length) btn.remove();
@@ -1016,8 +1103,9 @@ const INDEX_HTML = String.raw`<!doctype html>
       selected.forEach(function (path) { params.append('projectDir', path); });
       params.set('agent', selectedAgents().join(','));
       params.set('q', els.query.value.trim());
-      params.set('reasoning', els.showReasoning.checked ? '1' : '0');
-      params.set('role', els.showTools.checked ? 'user,assistant,tool' : 'user,assistant');
+      params.set('reasoning', els.firstPromptOnly.checked ? '0' : (els.showReasoning.checked ? '1' : '0'));
+      params.set('role', els.firstPromptOnly.checked ? 'user' : (els.showTools.checked ? 'user,assistant,tool' : 'user,assistant'));
+      params.set('firstPromptOnly', els.firstPromptOnly.checked ? '1' : '0');
       if (els.last.value) params.set('last', els.last.value);
 
       els.status.textContent = 'ログを読み込んでいます...';
@@ -1070,6 +1158,7 @@ const INDEX_HTML = String.raw`<!doctype html>
     els.manualPath.addEventListener('keydown', function (ev) { if (ev.key === 'Enter') els.addPath.click(); });
     els.searchButton.addEventListener('click', search);
     els.queryButton.addEventListener('click', search);
+    els.firstPromptOnly.addEventListener('change', updateLogModeControls);
     els.copyResults.addEventListener('click', function () {
       if (!lastData || !lastData.summary || lastData.summary.sessions === 0) return;
       var oldText = els.copyResults.textContent;
@@ -1090,6 +1179,7 @@ const INDEX_HTML = String.raw`<!doctype html>
     els.reloadProjects.addEventListener('click', loadProjects);
     els.query.addEventListener('keydown', function (ev) { if (ev.key === 'Enter') search(); });
 
+    updateLogModeControls();
     loadProjects();
   </script>
 </body>
