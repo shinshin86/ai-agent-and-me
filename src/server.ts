@@ -342,6 +342,19 @@ const INDEX_HTML = String.raw`<!doctype html>
       gap: 14px;
     }
     h1 { margin: 0; font-size: 18px; }
+    .side-section {
+      border: 1px solid var(--line);
+      border-radius: 12px;
+      background: var(--panel);
+      padding: 12px;
+      display: grid;
+      gap: 10px;
+      box-shadow: var(--shadow);
+    }
+    .side-section.primary { border-color: var(--accent); }
+    .section-title { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; font-weight: 750; }
+    .section-title span:first-child { color: var(--text); }
+    .section-help { color: var(--muted); font-size: 12px; line-height: 1.5; margin-top: -3px; }
     .side-label { font-size: 12px; color: var(--muted); font-weight: 700; margin-bottom: 5px; display: flex; justify-content: space-between; align-items: baseline; }
     .side-label a { color: var(--accent); font-weight: 600; text-decoration: none; cursor: pointer; font-size: 12px; }
     input[type="text"], input[type="search"], select {
@@ -423,6 +436,7 @@ const INDEX_HTML = String.raw`<!doctype html>
     .hint { font-size: 11.5px; color: var(--muted); line-height: 1.5; margin-top: 8px; padding-left: 2px; }
     .row { display: flex; gap: 6px; }
     .row > input { flex: 1; }
+    .project-actions { margin-top: 8px; }
     button {
       border: 1px solid var(--accent);
       background: var(--accent);
@@ -666,47 +680,31 @@ const INDEX_HTML = String.raw`<!doctype html>
     <aside>
       <h1>AI Agent and Me</h1>
 
-      <div>
-        <div class="side-label">
-          <span>プロジェクト</span>
+      <section class="side-section primary">
+        <div class="section-title">
+          <span>1. プロジェクトを選ぶ</span>
           <a id="clearProjects">全解除</a>
         </div>
-        <input id="projectFilter" type="search" placeholder="プロジェクト名で絞り込み" autocomplete="off">
+        <div class="section-help">まずログを見たいプロジェクトを選択します。複数選択できます。</div>
+        <input id="projectFilter" type="search" placeholder="プロジェクト一覧を絞り込み" autocomplete="off">
         <div class="project-list" id="projectList"></div>
-      </div>
-
-      <div>
-        <div class="side-label"><span>絶対パスを追加</span></div>
-        <div class="row">
-          <input id="manualPath" type="text" placeholder="/Users/me/repo/project">
-          <button id="addPath" class="secondary">追加</button>
+        <div class="row project-actions">
+          <button id="searchButton" style="flex:1">選択プロジェクトのログを開く</button>
+          <button id="reloadProjects" class="secondary">再読込</button>
         </div>
-      </div>
+      </section>
 
-      <div>
+      <section class="side-section">
+        <div class="section-title"><span>2. 表示条件を調整</span></div>
+        <div class="section-help">表示中のログに自動で反映されます。</div>
+
         <div class="side-label"><span>エージェント</span></div>
         <div class="checks">
           <label class="check"><input type="checkbox" name="agent" value="claude" checked> Claude</label>
           <label class="check"><input type="checkbox" name="agent" value="codex" checked> Codex</label>
           <label class="check"><input type="checkbox" name="agent" value="copilot" checked> Copilot</label>
         </div>
-      </div>
 
-      <div>
-        <div class="side-label"><span>表示モード</span></div>
-        <div class="checks">
-          <label class="check"><input id="firstPromptOnly" type="checkbox"> 最初の依頼のみ</label>
-        </div>
-        <div class="side-label" style="margin-top:10px"><span>追加で表示する詳細</span></div>
-        <div class="checks">
-          <label class="check"><input id="showReasoning" type="checkbox"> 💭 AI推論サマリー</label>
-          <label class="check"><input id="showTools" type="checkbox"> 🔧 ツール実行詳細</label>
-        </div>
-        <div class="hint">通常の会話本文は常に表示されます。ここでは補助情報だけを追加表示します。</div>
-        <div id="logModeHint" class="hint" hidden>「最初の依頼のみ」では各セッション冒頭の依頼だけを表示します。</div>
-      </div>
-
-      <div>
         <div class="side-label"><span>期間</span></div>
         <select id="last">
           <option value="">すべて</option>
@@ -714,17 +712,34 @@ const INDEX_HTML = String.raw`<!doctype html>
           <option value="7d">直近7日</option>
           <option value="30d">直近30日</option>
         </select>
-      </div>
 
-      <div class="row">
-        <button id="searchButton" style="flex:1">表示する</button>
-        <button id="reloadProjects" class="secondary">再読込</button>
-      </div>
+        <div class="side-label"><span>表示モード</span></div>
+        <div class="checks">
+          <label class="check"><input id="firstPromptOnly" type="checkbox"> 最初の依頼のみ</label>
+        </div>
+        <div class="side-label"><span>追加で表示する詳細</span></div>
+        <div class="checks">
+          <label class="check"><input id="showReasoning" type="checkbox"> 💭 AI推論サマリー</label>
+          <label class="check"><input id="showTools" type="checkbox"> 🔧 ツール実行詳細</label>
+        </div>
+        <div class="hint">通常の会話本文は常に表示されます。ここでは補助情報だけを追加表示します。</div>
+        <div id="logModeHint" class="hint" hidden>「最初の依頼のみ」では各セッション冒頭の依頼だけを表示します。</div>
+      </section>
+
+      <section class="side-section">
+        <div class="section-title"><span>パスを直接追加</span></div>
+        <div class="section-help">一覧にないリポジトリを絶対パスで追加できます。</div>
+        <div class="row">
+          <input id="manualPath" type="text" placeholder="/Users/me/repo/project">
+          <button id="addPath" class="secondary">追加</button>
+        </div>
+      </section>
+
     </aside>
 
     <main>
       <div class="searchbar">
-        <input id="query" type="search" placeholder="選択したプロジェクトの会話を文字列で検索 (Enter)" autocomplete="off">
+        <input id="query" type="search" placeholder="表示中のログをキーワード検索 (Enter)" autocomplete="off">
         <button id="queryButton">検索</button>
         <button id="copyResults" class="secondary" disabled>結果をコピー</button>
       </div>
@@ -734,7 +749,7 @@ const INDEX_HTML = String.raw`<!doctype html>
         <div class="empty">
           <span class="empty-icon">🗂️</span>
           <div class="empty-title">プロジェクトを選んで表示しましょう</div>
-          左のリストからプロジェクトを選び、「表示する」を押すと会話ログが表示されます。<br>複数選択や絞り込み、期間フィルタも利用できます。
+          左のリストからプロジェクトを選び、「選択プロジェクトのログを開く」を押すと会話ログが表示されます。<br>表示後は、左側の表示条件が自動で反映されます。
         </div>
       </div>
     </main>
@@ -887,7 +902,7 @@ const INDEX_HTML = String.raw`<!doctype html>
     }
 
     function updateSearchButton() {
-      els.searchButton.textContent = selected.size > 0 ? '表示する (' + selected.size + ')' : '表示する';
+      els.searchButton.textContent = selected.size > 0 ? '選択プロジェクトのログを開く (' + selected.size + ')' : '選択プロジェクトのログを開く';
       els.searchButton.disabled = selected.size === 0;
     }
 
@@ -1536,7 +1551,7 @@ const INDEX_HTML = String.raw`<!doctype html>
       researchIfShown();
     });
     // 既に結果が表示されている場合、フィルタ変更を即時反映する
-    // (「変更後に再度『表示する』が必要」という分かりにくさを解消)。
+    // (フィルター変更後に再度ボタンを押す必要がある、という分かりにくさを解消)。
     els.showReasoning.addEventListener('change', researchIfShown);
     els.showTools.addEventListener('change', researchIfShown);
     els.last.addEventListener('change', researchIfShown);
