@@ -360,6 +360,7 @@ const INDEX_HTML = String.raw`<!doctype html>
     .project-list {
       border: 1px solid var(--line);
       border-radius: 8px;
+      min-height: 132px;
       max-height: 320px;
       overflow: auto;
       background: var(--panel);
@@ -622,15 +623,31 @@ const INDEX_HTML = String.raw`<!doctype html>
     }
     .toast.show { opacity: 1; transform: translateX(-50%) translateY(0); }
 
-    /* ---- loading skeleton ---- */
+    /* ---- common loading component ---- */
+    .loading { display: block; }
+    .loading-status { display: flex; align-items: center; gap: 8px; color: var(--muted); font-size: 12.5px; margin-bottom: 10px; }
+    .spinner {
+      width: 14px; height: 14px; flex: none;
+      border: 2px solid var(--line);
+      border-top-color: var(--accent);
+      border-radius: 50%;
+      animation: spin .7s linear infinite;
+    }
     .skeleton { border: 1px solid var(--line); border-radius: 10px; background: var(--panel); padding: 14px; margin-bottom: 10px; }
     .skeleton .bar { height: 12px; border-radius: 6px; background: linear-gradient(90deg, var(--line) 25%, var(--hover) 37%, var(--line) 63%); background-size: 400% 100%; animation: shimmer 1.3s ease infinite; }
     .skeleton .bar + .bar { margin-top: 8px; }
     .skeleton .bar.short { width: 40%; }
     .skeleton .bar.medium { width: 70%; }
+    /* compact variant for the sidebar project list */
+    .loading.compact { padding: 8px; }
+    .loading.compact .loading-status { padding: 0 2px; margin-bottom: 8px; }
+    .skeleton.row { padding: 8px 10px; margin-bottom: 6px; }
+    .skeleton.row:last-child { margin-bottom: 0; }
     @keyframes shimmer { 0% { background-position: 100% 0; } 100% { background-position: 0 0; } }
+    @keyframes spin { to { transform: rotate(360deg); } }
     @media (prefers-reduced-motion: reduce) {
       .skeleton .bar { animation: none; }
+      .spinner { animation-duration: 1.6s; }
       .toast, .session, button { transition: none; }
     }
 
@@ -761,9 +778,25 @@ const INDEX_HTML = String.raw`<!doctype html>
       toastTimer = window.setTimeout(function () { els.toast.classList.remove('show'); }, 1800);
     }
 
-    function renderSkeleton() {
-      var card = '<div class="skeleton"><div class="bar short"></div><div class="bar medium"></div><div class="bar"></div></div>';
-      return card + card + card;
+    // 共通ローディングコンポーネント。
+    // variant: 'panel'(メインパネル) / 'compact'(サイドバーのプロジェクト一覧)
+    function loadingMarkup(options) {
+      var opts = options || {};
+      var variant = opts.variant === 'compact' ? 'compact' : 'panel';
+      var rows = typeof opts.rows === 'number' ? opts.rows : (variant === 'compact' ? 4 : 3);
+      var label = opts.label || '読み込んでいます...';
+
+      var status = '<div class="loading-status"><span class="spinner" aria-hidden="true"></span>'
+        + '<span>' + escapeHtml(label) + '</span></div>';
+
+      var cards = '';
+      for (var i = 0; i < rows; i++) {
+        cards += variant === 'compact'
+          ? '<div class="skeleton row"><div class="bar medium"></div><div class="bar short"></div></div>'
+          : '<div class="skeleton"><div class="bar short"></div><div class="bar medium"></div><div class="bar"></div></div>';
+      }
+
+      return '<div class="loading ' + variant + '" role="status" aria-live="polite">' + status + cards + '</div>';
     }
 
     function escapeHtml(value) {
@@ -866,7 +899,8 @@ const INDEX_HTML = String.raw`<!doctype html>
     }
 
     async function loadProjects() {
-      els.status.textContent = 'プロジェクト一覧を読み込んでいます...';
+      els.status.textContent = '';
+      els.projectList.innerHTML = loadingMarkup({ variant: 'compact', label: 'プロジェクト一覧を読み込み中...' });
       try {
         var res = await fetch('/api/projects');
         var data = await res.json();
@@ -881,6 +915,7 @@ const INDEX_HTML = String.raw`<!doctype html>
         els.status.textContent = projects.length + ' 件のプロジェクトを検出しました。表示したいプロジェクトを選択してください(複数可)。';
       } catch (err) {
         els.status.textContent = '';
+        els.projectList.innerHTML = '<div class="project-empty">プロジェクト一覧の読み込みに失敗しました。「再読込」を試してください。</div>';
         els.results.innerHTML = '<div class="error">' + escapeHtml(err.message) + '</div>';
       }
       updateSearchButton();
@@ -1434,8 +1469,8 @@ const INDEX_HTML = String.raw`<!doctype html>
       var controller = new AbortController();
       searchController = controller;
 
-      els.status.textContent = 'ログを読み込んでいます...';
-      els.results.innerHTML = renderSkeleton();
+      els.status.textContent = '';
+      els.results.innerHTML = loadingMarkup({ variant: 'panel', label: 'ログを読み込み中...' });
       els.summary.innerHTML = '';
       els.copyResults.disabled = true;
       lastData = null;
