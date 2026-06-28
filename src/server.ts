@@ -48,6 +48,14 @@ function parseRoles(params: URLSearchParams): Role[] {
   return roles.length > 0 ? roles : ['user', 'assistant', 'tool', 'system'];
 }
 
+function parseBooleanFlag(value: string | null, defaultValue: boolean): boolean {
+  if (value === null) return defaultValue;
+  const normalized = value.trim().toLowerCase();
+  if (['0', 'false', 'off', 'no'].includes(normalized)) return false;
+  if (['1', 'true', 'on', 'yes'].includes(normalized)) return true;
+  return defaultValue;
+}
+
 function turnText(turn: UnifiedTurn): string {
   const chunks = [turn.text ?? ''];
   if (turn.toolCall) {
@@ -141,8 +149,8 @@ async function collectForRequest(params: URLSearchParams): Promise<{ status: num
 
   const agents = parseAgents(params.get('agent'));
   const roles = parseRoles(params);
-  const includeReasoning = params.get('reasoning') !== '0';
-  const firstPromptOnly = params.get('firstPromptOnly') === '1';
+  const includeReasoning = parseBooleanFlag(params.get('reasoning'), true);
+  const firstPromptOnly = parseBooleanFlag(params.get('firstPromptOnly'), false);
   const q = params.get('q') ?? '';
 
   const range = resolveDateRange({
@@ -672,11 +680,12 @@ const INDEX_HTML = String.raw`<!doctype html>
         <div class="checks">
           <label class="check"><input id="firstPromptOnly" type="checkbox"> 最初の依頼のみ</label>
         </div>
-        <div class="side-label" style="margin-top:10px"><span>含めるログ</span></div>
+        <div class="side-label" style="margin-top:10px"><span>追加で表示する詳細</span></div>
         <div class="checks">
-          <label class="check"><input id="showReasoning" type="checkbox" checked> 思考ログ</label>
-          <label class="check"><input id="showTools" type="checkbox"> ツールログ</label>
+          <label class="check"><input id="showReasoning" type="checkbox"> 💭 AI推論サマリー</label>
+          <label class="check"><input id="showTools" type="checkbox"> 🔧 ツール実行詳細</label>
         </div>
+        <div class="hint">通常の会話本文は常に表示されます。ここでは補助情報だけを追加表示します。</div>
         <div id="logModeHint" class="hint" hidden>「最初の依頼のみ」では各セッション冒頭の依頼だけを表示します。</div>
       </div>
 
@@ -937,7 +946,7 @@ const INDEX_HTML = String.raw`<!doctype html>
 
       if (turn.kind === 'reasoning') {
         return '<div class="turn reasoning"><details class="sub"' + (hit ? ' open' : '') + '>'
-          + '<summary>💭 思考ログ ' + time + ' — ' + highlight(oneLine(turn.text || '', 90), q) + '</summary>'
+          + '<summary>💭 AI推論サマリー ' + time + ' — ' + highlight(oneLine(turn.text || '', 90), q) + '</summary>'
           + '<div class="sub-body">' + highlight(turn.text || '', q) + '</div>'
           + '</details></div>';
       }
@@ -986,7 +995,7 @@ const INDEX_HTML = String.raw`<!doctype html>
       session.turns.forEach(function (turn) {
         var time = fmtDate(turn.timestamp);
         if (turn.kind === 'reasoning') {
-          lines.push('[' + time + '] AI reasoning (' + turn.agent + ')');
+          lines.push('[' + time + '] AI reasoning summary (' + turn.agent + ')');
           lines.push(turn.text || '');
         } else if (turn.role === 'tool' || turn.toolCall) {
           var tc = turn.toolCall || {};
@@ -1176,6 +1185,48 @@ const INDEX_HTML = String.raw`<!doctype html>
         + '</summary>'
         + '<div class="turns"></div>'
         + '</details>';
+    }
+
+    // サーバ側でもフィルタしているが、古いレスポンスや想定外の
+    // reasoning パラメータ表現に備え、クライアント側でも最終防衛する。
+    function normalizeResultData(data) {
+      if (!data || !data.filters || data.filters.reasoning !== false) return data;
+
+      var q = data.filters.q || '';
+      var totalTurns = 0;
+      var matchedTurns = 0;
+      data.projects = (data.projects || []).map(function (group) {
+        var sessions = (group.sessions || []).map(function (session) {
+          var turns = (session.turns || []).filter(function (turn) { return turn.kind !== 'reasoning'; });
+          var sessionMatched = q
+            ? turns.reduce(function (n, turn) { return turnMatches(turn, q) ? n + 1 : n; }, 0)
+            : turns.length;
+          return Object.assign({}, session, { turns: turns, matchedTurns: sessionMatched });
+        }).filter(function (session) { return session.turns.length > 0; });
+
+        var groupTurns = sessions.reduce(function (n, session) { return n + session.turns.length; }, 0);
+        var groupMatched = sessions.reduce(function (n, session) { return n + session.matchedTurns; }, 0);
+        totalTurns += groupTurns;
+        matchedTurns += groupMatched;
+
+        return Object.assign({}, group, {
+          sessions: sessions,
+          summary: Object.assign({}, group.summary || {}, {
+            sessions: sessions.length,
+            turns: groupTurns,
+            matchedTurns: groupMatched,
+          }),
+        });
+      }).filter(function (group) { return group.sessions.length > 0; });
+
+      data.summary = Object.assign({}, data.summary || {}, {
+        projects: data.projects.length,
+        sessions: data.projects.reduce(function (n, group) { return n + group.sessions.length; }, 0),
+        turns: totalTurns,
+        matchedTurns: matchedTurns,
+      });
+
+      return data;
     }
 
     function renderResults(data) {
@@ -1395,6 +1446,7 @@ const INDEX_HTML = String.raw`<!doctype html>
         if (!res.ok) throw new Error(data.error || 'request failed');
         // 応答が返る間に新しい検索が始まっていたら、この結果は破棄する。
         if (controller !== searchController) return;
+        data = normalizeResultData(data);
         els.status.textContent = '';
         lastData = data;
         renderResults(data);
