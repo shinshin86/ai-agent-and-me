@@ -2,7 +2,7 @@ import { readdirSync, existsSync, statSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 import type { CollectOptions, UnifiedSession, UnifiedTurn, Role } from '../core/types.js';
-import { addUniqueString } from '../core/modelInfo.js';
+import { addUniqueModelName, addUniqueString } from '../core/modelInfo.js';
 import { readJsonl } from '../utils/jsonl.js';
 
 const CODEX_SESSIONS_DIR = join(homedir(), '.codex', 'sessions');
@@ -114,7 +114,7 @@ async function readRolloutIfMatching(
 
     if (type === 'turn_context') {
       const payload = rec.payload ?? {};
-      addUniqueString(models, payload.model);
+      addUniqueModelName(models, payload.model);
       addUniqueString(details, payload.effort);
     }
 

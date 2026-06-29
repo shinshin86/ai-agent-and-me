@@ -3,7 +3,7 @@ import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { encodeClaudeProjectDir } from '../core/path.js';
 import type { CollectOptions, UnifiedSession, UnifiedTurn } from '../core/types.js';
-import { addUniqueString } from '../core/modelInfo.js';
+import { addUniqueModelName } from '../core/modelInfo.js';
 import { readJsonl } from '../utils/jsonl.js';
 
 const CLAUDE_PROJECTS_DIR = join(homedir(), '.claude', 'projects');
@@ -86,7 +86,7 @@ export async function collectClaude(opts: CollectOptions): Promise<UnifiedSessio
       const role = (msg?.role ?? type) as 'user' | 'assistant';
       const content = msg?.content;
       if (role === 'assistant') {
-        addUniqueString(models, msg?.model);
+        addUniqueModelName(models, msg?.model);
         if (typeof rec.version === 'string') toolVersion = rec.version;
       }
 

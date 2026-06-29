@@ -6,12 +6,14 @@ import { discoverProjects } from './core/projects.js';
 import { collectClaude } from './adapters/claude.js';
 import { collectCodex } from './adapters/codex.js';
 import { collectCopilot } from './adapters/copilot.js';
+import { normalizeModelName } from './core/modelInfo.js';
 import type { AgentId, CollectOptions, Role, UnifiedSession, UnifiedTurn } from './core/types.js';
 
 const DEFAULT_HOST = '127.0.0.1';
 const DEFAULT_PORT = 4732;
 const MAX_PROJECTS_PER_REQUEST = 20;
 const MAX_TOOL_PAYLOAD_CHARS = 20_000;
+const UNKNOWN_MODEL_LABEL = 'モデル不明';
 
 function sendJson(res: ServerResponse, status: number, body: unknown): void {
   res.writeHead(status, {
@@ -64,6 +66,52 @@ function turnText(turn: UnifiedTurn): string {
     if (turn.toolCall.output !== undefined) chunks.push(JSON.stringify(turn.toolCall.output));
   }
   return chunks.join('\n');
+}
+
+function sessionModelNames(session: UnifiedSession | SessionView): string[] {
+  const models = session.modelInfo?.models
+    ?.map((m) => normalizeModelName(m))
+    .filter((m): m is string => typeof m === 'string' && m.length > 0) ?? [];
+  return models.length > 0 ? models : [UNKNOWN_MODEL_LABEL];
+}
+
+function parseModels(params: URLSearchParams): string[] {
+  const values = [
+    ...params.getAll('model'),
+    ...(params.get('models') ?? '').split(','),
+  ];
+  return [...new Set(values.map((s) => s.trim()).filter(Boolean))];
+}
+
+function sessionMatchesModels(session: UnifiedSession | SessionView, models: string[]): boolean {
+  if (models.length === 0) return true;
+  const wanted = new Set(models.map((m) => m.toLowerCase()));
+  return sessionModelNames(session).some((m) => wanted.has(m.toLowerCase()));
+}
+
+interface ModelFacet {
+  name: string;
+  count: number;
+}
+
+function collectModelFacets(projects: { sessions: SessionView[] }[]): ModelFacet[] {
+  const counts = new Map<string, number>();
+  for (const project of projects) {
+    for (const session of project.sessions) {
+      for (const model of sessionModelNames(session)) {
+        counts.set(model, (counts.get(model) ?? 0) + 1);
+      }
+    }
+  }
+
+  return [...counts.entries()]
+    .map(([name, count]) => ({ name, count }))
+    .sort((a, b) => {
+      if (a.name === UNKNOWN_MODEL_LABEL) return 1;
+      if (b.name === UNKNOWN_MODEL_LABEL) return -1;
+      if (b.count !== a.count) return b.count - a.count;
+      return a.name.localeCompare(b.name);
+    });
 }
 
 function truncatePayload(value: unknown): unknown {
@@ -151,6 +199,7 @@ async function collectForRequest(params: URLSearchParams): Promise<{ status: num
   const roles = parseRoles(params);
   const includeReasoning = parseBooleanFlag(params.get('reasoning'), true);
   const firstPromptOnly = parseBooleanFlag(params.get('firstPromptOnly'), false);
+  const selectedModels = parseModels(params);
   const q = params.get('q') ?? '';
 
   const range = resolveDateRange({
@@ -189,13 +238,30 @@ async function collectForRequest(params: URLSearchParams): Promise<{ status: num
     })
   );
 
-  const projects = projectResults
+  const baseProjects = projectResults
     .filter((p): p is NonNullable<typeof p> => p !== null)
     .sort((a, b) => {
       const aLatest = a.sessions[0]?.startedAt ?? '';
       const bLatest = b.sessions[0]?.startedAt ?? '';
       return bLatest.localeCompare(aLatest);
     });
+  const availableModels = collectModelFacets(baseProjects);
+
+  const projects = baseProjects
+    .map((project) => {
+      if (selectedModels.length === 0) return project;
+      const sessions = project.sessions.filter((session) => sessionMatchesModels(session, selectedModels));
+      return {
+        ...project,
+        summary: {
+          sessions: sessions.length,
+          turns: sessions.reduce((n, s) => n + s.turns.length, 0),
+          matchedTurns: sessions.reduce((n, s) => n + s.matchedTurns, 0),
+        },
+        sessions,
+      };
+    })
+    .filter((p) => p.sessions.length > 0);
 
   return {
     status: 200,
@@ -203,6 +269,7 @@ async function collectForRequest(params: URLSearchParams): Promise<{ status: num
       filters: {
         agents,
         roles,
+        models: selectedModels,
         reasoning: includeReasoning,
         firstPromptOnly,
         q,
@@ -215,6 +282,7 @@ async function collectForRequest(params: URLSearchParams): Promise<{ status: num
         turns: projects.reduce((n, p) => n + p.summary.turns, 0),
         matchedTurns: projects.reduce((n, p) => n + p.summary.matchedTurns, 0),
       },
+      availableModels,
       projects,
     },
   };
@@ -433,6 +501,10 @@ const INDEX_HTML = String.raw`<!doctype html>
     .check:hover { border-color: var(--accent); }
     .check:has(input:checked) { background: var(--accent-soft); border-color: var(--accent); color: var(--accent); font-weight: 650; }
     .check:has(input:disabled) { opacity: .45; cursor: not-allowed; }
+    .model-filters { display: grid; gap: 6px; }
+    .model-filters .checks { gap: 5px; }
+    .check .count { color: var(--muted); font-size: 11px; font-weight: 600; }
+    .check:has(input:checked) .count { color: var(--accent); }
     .hint { font-size: 11.5px; color: var(--muted); line-height: 1.5; margin-top: 8px; padding-left: 2px; }
     .row { display: flex; gap: 6px; }
     .row > input { flex: 1; }
@@ -705,6 +777,11 @@ const INDEX_HTML = String.raw`<!doctype html>
           <label class="check"><input type="checkbox" name="agent" value="copilot" checked> Copilot</label>
         </div>
 
+        <div class="side-label"><span>モデル</span></div>
+        <div id="modelFilters" class="model-filters">
+          <div class="hint">ログを表示すると、利用モデルで絞り込めます。</div>
+        </div>
+
         <div class="side-label"><span>期間</span></div>
         <select id="last">
           <option value="">すべて</option>
@@ -766,6 +843,7 @@ const INDEX_HTML = String.raw`<!doctype html>
       last: document.getElementById('last'),
       showReasoning: document.getElementById('showReasoning'),
       showTools: document.getElementById('showTools'),
+      modelFilters: document.getElementById('modelFilters'),
       firstPromptOnly: document.getElementById('firstPromptOnly'),
       searchButton: document.getElementById('searchButton'),
       reloadProjects: document.getElementById('reloadProjects'),
@@ -781,6 +859,7 @@ const INDEX_HTML = String.raw`<!doctype html>
 
     var projects = [];          // discovered projects
     var selected = new Set();   // selected project paths
+    var selectedModels = new Set(); // selected model names
     var lastQuery = '';
     var PAGE = 30;              // sessions rendered per project before "もっと見る"
     var toastTimer = null;
@@ -850,14 +929,21 @@ const INDEX_HTML = String.raw`<!doctype html>
       var tool = modelInfo.toolName || 'ツール不明';
       if (modelInfo.toolVersion) tool += ' v' + modelInfo.toolVersion;
       pieces.push(tool);
-      pieces.push(modelInfo.models && modelInfo.models.length ? modelInfo.models.join(', ') : 'モデル不明');
+      var models = normalizedModelNames(modelInfo.models || []);
+      pieces.push(models.length ? models.join(', ') : 'モデル不明');
       if (modelInfo.provider) pieces.push(modelInfo.provider);
       if (modelInfo.details && modelInfo.details.length) pieces.push(modelInfo.details.join(', '));
       return pieces.join(' · ');
     }
 
+    function normalizedModelNames(models) {
+      return (models || []).map(function (m) { return String(m || '').trim(); })
+        .filter(function (m) { return m && m !== '<synthetic>'; });
+    }
+
     function modelBadge(modelInfo) {
-      var models = modelInfo && modelInfo.models && modelInfo.models.length ? modelInfo.models.join(', ') : '';
+      var names = modelInfo ? normalizedModelNames(modelInfo.models || []) : [];
+      var models = names.length ? names.join(', ') : '';
       var label = models || 'モデル不明';
       var cls = models ? 'badge model' : 'badge model unknown';
       return '<span class="' + cls + '" title="' + escapeHtml(formatModelSummary(modelInfo)) + '">' + escapeHtml(label) + '</span>';
@@ -904,6 +990,34 @@ const INDEX_HTML = String.raw`<!doctype html>
     function updateSearchButton() {
       els.searchButton.textContent = selected.size > 0 ? '選択プロジェクトのログを開く (' + selected.size + ')' : '選択プロジェクトのログを開く';
       els.searchButton.disabled = selected.size === 0;
+    }
+
+    function renderModelFilters(models) {
+      var list = Array.isArray(models) ? models : [];
+      if (list.length === 0) {
+        selectedModels.clear();
+        els.modelFilters.innerHTML = '<div class="hint">ログを表示すると、利用モデルで絞り込めます。</div>';
+        return;
+      }
+
+      var available = new Set(list.map(function (m) { return m.name; }));
+      Array.from(selectedModels).forEach(function (name) {
+        if (!available.has(name)) selectedModels.delete(name);
+      });
+
+      els.modelFilters.innerHTML = '<div class="checks">' + list.map(function (m) {
+        return '<label class="check">'
+          + '<input type="checkbox" name="model" value="' + escapeHtml(m.name) + '"' + (selectedModels.has(m.name) ? ' checked' : '') + '>'
+          + '<span>' + escapeHtml(m.name) + '</span>'
+          + '<span class="count">' + m.count + '</span>'
+          + '</label>';
+      }).join('') + '</div>'
+        + '<div class="hint">現在の検索結果に含まれるモデルです。チェックするとさらに絞り込みます。</div>';
+    }
+
+    function resetModelFilters() {
+      selectedModels.clear();
+      renderModelFilters([]);
     }
 
     function updateLogModeControls() {
@@ -1104,6 +1218,7 @@ const INDEX_HTML = String.raw`<!doctype html>
       ];
       if (filters.q) lines.push('Query: ' + filters.q);
       if (filters.agents) lines.push('Agents: ' + filters.agents.join(', '));
+      if (filters.models && filters.models.length) lines.push('Models: ' + filters.models.join(', '));
       if (filters.roles) lines.push('Roles: ' + filters.roles.join(', '));
       if (filters.firstPromptOnly) lines.push('Mode: first prompt only');
       if (filters.since) lines.push('Since: ' + fmtDate(filters.since));
@@ -1281,6 +1396,7 @@ const INDEX_HTML = String.raw`<!doctype html>
 
     function renderResults(data) {
       sessionStore = [];
+      renderModelFilters(data.availableModels || []);
       lastQuery = (data.filters && data.filters.q) || '';
       var q = lastQuery;
       var firstPromptOnly = !!(data.filters && data.filters.firstPromptOnly);
@@ -1289,6 +1405,7 @@ const INDEX_HTML = String.raw`<!doctype html>
       els.summary.innerHTML = [
         '<span class="pill">プロジェクト: ' + data.summary.projects + '</span>',
         '<span class="pill">セッション: ' + data.summary.sessions + '</span>',
+        selectedModels.size > 0 ? '<span class="pill">モデル: ' + Array.from(selectedModels).map(escapeHtml).join(', ') + '</span>' : '',
         firstPromptOnly ? '<span class="pill">最初の依頼のみ</span>' : '',
         q
           ? '<span class="pill hit">ヒット: ' + data.summary.matchedTurns + ' / ' + data.summary.turns + ' turns</span>'
@@ -1472,6 +1589,7 @@ const INDEX_HTML = String.raw`<!doctype html>
 
       var params = new URLSearchParams();
       selected.forEach(function (path) { params.append('projectDir', path); });
+      selectedModels.forEach(function (model) { params.append('model', model); });
       params.set('agent', agents.join(','));
       params.set('q', els.query.value.trim());
       params.set('reasoning', els.firstPromptOnly.checked ? '0' : (els.showReasoning.checked ? '1' : '0'));
@@ -1524,10 +1642,19 @@ const INDEX_HTML = String.raw`<!doctype html>
       else selected.delete(cb.dataset.path);
       var item = cb.closest('.project-item');
       if (item) item.classList.toggle('active', cb.checked);
+      resetModelFilters();
       updateSearchButton();
+    });
+    els.modelFilters.addEventListener('change', function (ev) {
+      var cb = ev.target;
+      if (!cb || cb.name !== 'model') return;
+      if (cb.checked) selectedModels.add(cb.value);
+      else selectedModels.delete(cb.value);
+      researchIfShown();
     });
     els.clearProjects.addEventListener('click', function () {
       selected.clear();
+      resetModelFilters();
       renderProjectList();
       updateSearchButton();
     });
@@ -1538,6 +1665,7 @@ const INDEX_HTML = String.raw`<!doctype html>
         projects.unshift({ name: path.split('/').filter(Boolean).pop() || path, path: path, agents: [] });
       }
       selected.add(path);
+      resetModelFilters();
       els.manualPath.value = '';
       els.projectFilter.value = '';
       renderProjectList();

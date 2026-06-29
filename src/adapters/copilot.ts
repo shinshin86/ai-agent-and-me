@@ -2,7 +2,7 @@ import { readdirSync, existsSync, statSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 import type { CollectOptions, UnifiedSession, UnifiedTurn } from '../core/types.js';
-import { addUniqueString } from '../core/modelInfo.js';
+import { addUniqueModelName } from '../core/modelInfo.js';
 import { readJsonl } from '../utils/jsonl.js';
 
 const COPILOT_SESSIONS_DIR = join(homedir(), '.copilot', 'session-state');
@@ -43,7 +43,7 @@ export async function collectCopilot(opts: CollectOptions): Promise<UnifiedSessi
         startedAt = rec?.data?.startTime;
         sessionTitle = ctx?.repository ? `${ctx.repository}${ctx.branch ? '@' + ctx.branch : ''}` : undefined;
         if (typeof rec?.data?.copilotVersion === 'string') toolVersion = rec.data.copilotVersion;
-        addUniqueString(models, rec?.data?.selectedModel);
+        addUniqueModelName(models, rec?.data?.selectedModel);
         continue;
       }
 
