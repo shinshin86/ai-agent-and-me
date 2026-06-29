@@ -2,6 +2,14 @@ export type AgentId = 'claude' | 'codex' | 'copilot';
 
 export type Role = 'user' | 'assistant' | 'system' | 'tool';
 
+export interface SessionModelInfo {
+  toolName: string;
+  toolVersion?: string;
+  models: string[];
+  provider?: string;
+  details?: string[];
+}
+
 export interface UnifiedTurn {
   agent: AgentId;
   sessionId: string;
@@ -24,6 +32,7 @@ export interface UnifiedSession {
   repoPath: string;
   startedAt: string;
   endedAt?: string;
+  modelInfo?: SessionModelInfo;
   turns: UnifiedTurn[];
 }
 

@@ -1,4 +1,5 @@
 import type { UnifiedSession } from '../core/types.js';
+import { formatModelSummary } from '../core/modelInfo.js';
 
 export function formatMarkdown(sessions: UnifiedSession[]): string {
   const lines: string[] = [];
@@ -8,6 +9,7 @@ export function formatMarkdown(sessions: UnifiedSession[]): string {
     lines.push(`## [${s.agent}] ${s.sessionTitle ?? s.sessionId}`);
     lines.push(`- session: \`${s.sessionId}\``);
     lines.push(`- repo: \`${s.repoPath}\``);
+    lines.push(`- tool/model: ${formatModelSummary(s.modelInfo)}`);
     lines.push(`- started: ${s.startedAt}`);
     if (s.endedAt) lines.push(`- ended: ${s.endedAt}`);
     lines.push('');

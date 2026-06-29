@@ -20,6 +20,7 @@ program
   .option('--agent <list>', 'comma-separated agents: claude,codex,copilot', 'claude,codex,copilot')
   .option('--role <list>', 'comma-separated roles: user,assistant,tool,system', 'user,assistant,tool,system')
   .option('--conversation-only', 'shortcut for --role user,assistant (hide tool/system turns)', false)
+  .option('--first-prompt-only', 'show only the first user prompt in each session', false)
   .option('--since <value>', 'earliest timestamp (ISO8601 or YYYY-MM-DD, local TZ)')
   .option('--until <value>', 'latest timestamp (ISO8601 or YYYY-MM-DD, local TZ)')
   .option('--today', 'filter to today (local timezone)', false)
@@ -72,7 +73,9 @@ program
     const results = await Promise.all(tasks);
     let sessions = results.flat();
 
-    const roleList = (opts.conversationOnly
+    const roleList = (opts.firstPromptOnly
+      ? ['user']
+      : opts.conversationOnly
       ? ['user', 'assistant']
       : (opts.role as string).split(',').map((s) => s.trim()).filter(Boolean)
     );
@@ -87,6 +90,11 @@ program
 
     sessions = sessions
       .map((s) => ({ ...s, turns: s.turns.filter((t) => roleSet.has(t.role)) }))
+      .map((s) => {
+        if (!opts.firstPromptOnly) return s;
+        const firstUserTurn = s.turns.find((t) => t.role === 'user' && typeof t.text === 'string' && t.text.trim());
+        return { ...s, turns: firstUserTurn ? [firstUserTurn] : [] };
+      })
       .filter((s) => s.turns.length > 0);
 
     sessions.sort((a, b) => a.startedAt.localeCompare(b.startedAt));

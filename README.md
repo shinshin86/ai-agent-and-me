@@ -23,6 +23,7 @@ npm run web
 ai-agent-and-me /path/to/your/repo
 ai-agent-and-me . --agent claude,codex
 ai-agent-and-me . --conversation-only                 # show only user/assistant turns
+ai-agent-and-me . --first-prompt-only                 # show only the first user prompt per session
 ai-agent-and-me . --role user,assistant,tool          # custom role filter
 ai-agent-and-me . --today
 mkdir -p tmp
@@ -41,6 +42,7 @@ ai-agent-and-me . --format json > tmp/sessions.json
 | `--agent <list>` | Comma-separated agents: `claude,codex,copilot` | all |
 | `--role <list>` | Comma-separated roles: `user,assistant,tool,system` | all |
 | `--conversation-only` | Shortcut for `--role user,assistant` | false |
+| `--first-prompt-only` | Show only the first user prompt in each session | false |
 | `--today` | Filter to today (local timezone) | false |
 | `--yesterday` | Filter to yesterday (local timezone) | false |
 | `--date <ymd>` | Filter to a single day (`YYYY-MM-DD`, local TZ) | — |

@@ -2,6 +2,7 @@ import { readdirSync, existsSync, statSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 import type { CollectOptions, UnifiedSession, UnifiedTurn } from '../core/types.js';
+import { addUniqueModelName } from '../core/modelInfo.js';
 import { readJsonl } from '../utils/jsonl.js';
 
 const COPILOT_SESSIONS_DIR = join(homedir(), '.copilot', 'session-state');
@@ -24,6 +25,8 @@ export async function collectCopilot(opts: CollectOptions): Promise<UnifiedSessi
     let startedAt: string | undefined;
     let endedAt: string | undefined;
     let sessionTitle: string | undefined;
+    let toolVersion: string | undefined;
+    const models: string[] = [];
     const turns: UnifiedTurn[] = [];
 
     for await (const rec of readJsonl(eventsPath)) {
@@ -39,6 +42,8 @@ export async function collectCopilot(opts: CollectOptions): Promise<UnifiedSessi
         matched = true;
         startedAt = rec?.data?.startTime;
         sessionTitle = ctx?.repository ? `${ctx.repository}${ctx.branch ? '@' + ctx.branch : ''}` : undefined;
+        if (typeof rec?.data?.copilotVersion === 'string') toolVersion = rec.data.copilotVersion;
+        addUniqueModelName(models, rec?.data?.selectedModel);
         continue;
       }
 
@@ -107,6 +112,11 @@ export async function collectCopilot(opts: CollectOptions): Promise<UnifiedSessi
       repoPath: opts.repoPath,
       startedAt: startedAt ?? turns[0].timestamp,
       endedAt: endedAt ?? turns[turns.length - 1].timestamp,
+      modelInfo: {
+        toolName: 'GitHub Copilot CLI',
+        toolVersion,
+        models,
+      },
       turns,
     });
   }
