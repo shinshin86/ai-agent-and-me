@@ -1,19 +1,18 @@
 #!/usr/bin/env node
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http';
-import { resolveRepoPath } from './core/path.js';
 import { resolveDateRange } from './core/daterange.js';
 import { discoverProjects } from './core/projects.js';
-import { collectClaude } from './adapters/claude.js';
-import { collectCodex } from './adapters/codex.js';
-import { collectCopilot } from './adapters/copilot.js';
-import { normalizeModelName } from './core/modelInfo.js';
-import type { AgentId, CollectOptions, Role, UnifiedSession, UnifiedTurn } from './core/types.js';
+import {
+  buildApiResult,
+  parseAgents,
+  parseBooleanFlag,
+  parseModels,
+  parseRoles,
+} from './core/sessionApi.js';
 
 const DEFAULT_HOST = '127.0.0.1';
 const DEFAULT_PORT = 4732;
 const MAX_PROJECTS_PER_REQUEST = 20;
-const MAX_TOOL_PAYLOAD_CHARS = 20_000;
-const UNKNOWN_MODEL_LABEL = 'モデル不明';
 
 function sendJson(res: ServerResponse, status: number, body: unknown): void {
   res.writeHead(status, {
@@ -29,161 +28,6 @@ function sendHtml(res: ServerResponse): void {
     'cache-control': 'no-store',
   });
   res.end(INDEX_HTML);
-}
-
-function parseAgents(value: string | null): AgentId[] {
-  const allowed = new Set<AgentId>(['claude', 'codex', 'copilot']);
-  const agents = (value ?? 'claude,codex,copilot')
-    .split(',')
-    .map((s) => s.trim())
-    .filter((s): s is AgentId => allowed.has(s as AgentId));
-  return agents.length > 0 ? agents : ['claude', 'codex', 'copilot'];
-}
-
-function parseRoles(params: URLSearchParams): Role[] {
-  if (params.get('conversationOnly') === '1') return ['user', 'assistant'];
-  const allowed = new Set<Role>(['user', 'assistant', 'tool', 'system']);
-  const roles = (params.get('role') ?? 'user,assistant,tool,system')
-    .split(',')
-    .map((s) => s.trim())
-    .filter((s): s is Role => allowed.has(s as Role));
-  return roles.length > 0 ? roles : ['user', 'assistant', 'tool', 'system'];
-}
-
-function parseBooleanFlag(value: string | null, defaultValue: boolean): boolean {
-  if (value === null) return defaultValue;
-  const normalized = value.trim().toLowerCase();
-  if (['0', 'false', 'off', 'no'].includes(normalized)) return false;
-  if (['1', 'true', 'on', 'yes'].includes(normalized)) return true;
-  return defaultValue;
-}
-
-function turnText(turn: UnifiedTurn): string {
-  const chunks = [turn.text ?? ''];
-  if (turn.toolCall) {
-    chunks.push(turn.toolCall.name);
-    if (turn.toolCall.input !== undefined) chunks.push(JSON.stringify(turn.toolCall.input));
-    if (turn.toolCall.output !== undefined) chunks.push(JSON.stringify(turn.toolCall.output));
-  }
-  return chunks.join('\n');
-}
-
-function sessionModelNames(session: UnifiedSession | SessionView): string[] {
-  const models = session.modelInfo?.models
-    ?.map((m) => normalizeModelName(m))
-    .filter((m): m is string => typeof m === 'string' && m.length > 0) ?? [];
-  return models.length > 0 ? models : [UNKNOWN_MODEL_LABEL];
-}
-
-function parseModels(params: URLSearchParams): string[] {
-  const values = [
-    ...params.getAll('model'),
-    ...(params.get('models') ?? '').split(','),
-  ];
-  return [...new Set(values.map((s) => s.trim()).filter(Boolean))];
-}
-
-function sessionMatchesModels(session: UnifiedSession | SessionView, models: string[]): boolean {
-  if (models.length === 0) return true;
-  const wanted = new Set(models.map((m) => m.toLowerCase()));
-  return sessionModelNames(session).some((m) => wanted.has(m.toLowerCase()));
-}
-
-interface ModelFacet {
-  name: string;
-  count: number;
-}
-
-function collectModelFacets(projects: { sessions: SessionView[] }[]): ModelFacet[] {
-  const counts = new Map<string, number>();
-  for (const project of projects) {
-    for (const session of project.sessions) {
-      for (const model of sessionModelNames(session)) {
-        counts.set(model, (counts.get(model) ?? 0) + 1);
-      }
-    }
-  }
-
-  return [...counts.entries()]
-    .map(([name, count]) => ({ name, count }))
-    .sort((a, b) => {
-      if (a.name === UNKNOWN_MODEL_LABEL) return 1;
-      if (b.name === UNKNOWN_MODEL_LABEL) return -1;
-      if (b.count !== a.count) return b.count - a.count;
-      return a.name.localeCompare(b.name);
-    });
-}
-
-function truncatePayload(value: unknown): unknown {
-  if (value === undefined) return undefined;
-  const text = typeof value === 'string' ? value : JSON.stringify(value);
-  if (typeof text !== 'string') return value;
-  if (text.length <= MAX_TOOL_PAYLOAD_CHARS) return value;
-  return text.slice(0, MAX_TOOL_PAYLOAD_CHARS) + `\n…(truncated, ${text.length} chars total)`;
-}
-
-interface SessionView extends Omit<UnifiedSession, 'turns'> {
-  turns: UnifiedTurn[];
-  matchedTurns: number;
-}
-
-interface FilterResult {
-  sessions: SessionView[];
-  totalTurns: number;
-  matchedTurns: number;
-}
-
-// Keep whole sessions that contain a match (instead of dropping non-matching
-// turns) so the conversation flow stays readable around each hit.
-function filterSessions(
-  sessions: UnifiedSession[],
-  roles: Role[],
-  includeReasoning: boolean,
-  firstPromptOnly: boolean,
-  query: string
-): FilterResult {
-  const roleSet = new Set<Role>(roles);
-  const q = query.trim().toLowerCase();
-  let totalTurns = 0;
-  let matchedTurns = 0;
-
-  const filtered: SessionView[] = [];
-  for (const session of sessions) {
-    let turns = session.turns.filter(
-      (turn) => roleSet.has(turn.role) && (includeReasoning || turn.kind !== 'reasoning')
-    );
-    if (firstPromptOnly) {
-      const firstUserTurn = turns.find((turn) => turn.role === 'user' && typeof turn.text === 'string' && turn.text.trim());
-      turns = firstUserTurn ? [firstUserTurn] : [];
-    }
-    if (turns.length === 0) continue;
-    totalTurns += turns.length;
-
-    let matches = turns.length;
-    if (q) {
-      matches = turns.reduce((n, turn) => (turnText(turn).toLowerCase().includes(q) ? n + 1 : n), 0);
-      if (matches === 0) continue;
-    }
-    matchedTurns += matches;
-
-    turns.sort((a, b) => a.timestamp.localeCompare(b.timestamp));
-    const slimTurns = turns.map((turn) =>
-      turn.toolCall
-        ? {
-            ...turn,
-            toolCall: {
-              name: turn.toolCall.name,
-              input: truncatePayload(turn.toolCall.input),
-              output: truncatePayload(turn.toolCall.output),
-            },
-          }
-        : turn
-    );
-    filtered.push({ ...session, turns: slimTurns, matchedTurns: matches });
-  }
-
-  filtered.sort((a, b) => b.startedAt.localeCompare(a.startedAt));
-  return { sessions: filtered, totalTurns, matchedTurns };
 }
 
 async function collectForRequest(params: URLSearchParams): Promise<{ status: number; body: unknown }> {
@@ -211,80 +55,18 @@ async function collectForRequest(params: URLSearchParams): Promise<{ status: num
     until: params.get('until') ?? undefined,
   });
 
-  const seen = new Set<string>();
-  const projectResults = await Promise.all(
-    projectDirs.map(async (dir) => {
-      const repoPath = resolveRepoPath(dir);
-      if (seen.has(repoPath)) return null;
-      seen.add(repoPath);
-
-      const opts: CollectOptions = { repoPath, since: range.since, until: range.until };
-      const tasks: Promise<UnifiedSession[]>[] = [];
-      if (agents.includes('claude')) tasks.push(collectClaude(opts));
-      if (agents.includes('codex')) tasks.push(collectCodex(opts));
-      if (agents.includes('copilot')) tasks.push(collectCopilot(opts));
-
-      const collected = (await Promise.all(tasks)).flat();
-      const { sessions, totalTurns, matchedTurns } = filterSessions(collected, roles, includeReasoning, firstPromptOnly, q);
-
-      return {
-        project: {
-          name: repoPath.split('/').filter(Boolean).at(-1) ?? repoPath,
-          path: repoPath,
-        },
-        summary: { sessions: sessions.length, turns: totalTurns, matchedTurns },
-        sessions,
-      };
-    })
-  );
-
-  const baseProjects = projectResults
-    .filter((p): p is NonNullable<typeof p> => p !== null)
-    .sort((a, b) => {
-      const aLatest = a.sessions[0]?.startedAt ?? '';
-      const bLatest = b.sessions[0]?.startedAt ?? '';
-      return bLatest.localeCompare(aLatest);
-    });
-  const availableModels = collectModelFacets(baseProjects);
-
-  const projects = baseProjects
-    .map((project) => {
-      if (selectedModels.length === 0) return project;
-      const sessions = project.sessions.filter((session) => sessionMatchesModels(session, selectedModels));
-      return {
-        ...project,
-        summary: {
-          sessions: sessions.length,
-          turns: sessions.reduce((n, s) => n + s.turns.length, 0),
-          matchedTurns: sessions.reduce((n, s) => n + s.matchedTurns, 0),
-        },
-        sessions,
-      };
-    })
-    .filter((p) => p.sessions.length > 0);
-
   return {
     status: 200,
-    body: {
-      filters: {
-        agents,
-        roles,
-        models: selectedModels,
-        reasoning: includeReasoning,
-        firstPromptOnly,
-        q,
-        since: range.since?.toISOString(),
-        until: range.until?.toISOString(),
-      },
-      summary: {
-        projects: projects.length,
-        sessions: projects.reduce((n, p) => n + p.summary.sessions, 0),
-        turns: projects.reduce((n, p) => n + p.summary.turns, 0),
-        matchedTurns: projects.reduce((n, p) => n + p.summary.matchedTurns, 0),
-      },
-      availableModels,
-      projects,
-    },
+    body: await buildApiResult(projectDirs, {
+      agents,
+      roles,
+      models: selectedModels,
+      includeReasoning,
+      firstPromptOnly,
+      query: q,
+      since: range.since,
+      until: range.until,
+    }),
   };
 }
 
