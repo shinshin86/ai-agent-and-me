@@ -9,6 +9,7 @@
   "type": "module",
   "scripts": {
     "build": "tsc",
+    "test": "npm run build && tsx scripts/smoke.ts",
     "dev": "tsx src/cli.ts",
     "web": "tsx src/server.ts",
     "start:web": "node dist/server.js",

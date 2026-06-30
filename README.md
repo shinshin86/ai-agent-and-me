@@ -33,6 +33,8 @@ ai-agent-and-me . --last 24h
 ai-agent-and-me . --last 7d --conversation-only
 ai-agent-and-me . --since 2026-04-01 --until 2026-04-10
 ai-agent-and-me . --format json > tmp/sessions.json
+ai-agent-and-me . --format api-json --query "error" > tmp/sessions-api.json
+ai-agent-and-me . --format agent-json --no-reasoning --tool-output preview > tmp/sessions-agent.json
 ```
 
 ### Options
@@ -49,7 +51,12 @@ ai-agent-and-me . --format json > tmp/sessions.json
 | `--last <span>` | Relative window: `24h`, `7d`, `2w`, `30m` | — |
 | `--since <value>` | Earliest timestamp (ISO8601 or `YYYY-MM-DD`) | — |
 | `--until <value>` | Latest timestamp (ISO8601 or `YYYY-MM-DD`) | — |
-| `--format <fmt>` | Output format: `timeline` / `json` / `markdown` | `timeline` |
+| `--format <fmt>` | Output format: `timeline` / `json` (legacy raw `UnifiedSession[]`) / `markdown` / `api-json` / `agent-json` | `timeline` |
+| `--query <text>` | Full-text search query for `api-json` / `agent-json`; matching sessions keep all role-matching turns | — |
+| `--model <name>` | Model filter for `api-json` / `agent-json`; repeatable | — |
+| `--tool-name <name>` | Tool call name filter for `api-json` / `agent-json`; repeatable | — |
+| `--no-reasoning` | Exclude AI reasoning turns from `api-json` / `agent-json` | false |
+| `--tool-output <mode>` | Tool output for `agent-json`: `preview`, `full`, or `none` | `preview` |
 | `--out <path>` | Write output to file instead of stdout | stdout |
 | `--full` | Do not truncate message bodies (timeline format) | false |
 | `--width <n>` | Max chars per timeline line (ignored with `--full`) | 120 |
@@ -74,6 +81,20 @@ Run `npm run web` to start a local-only Web UI. By default, it listens only on `
 - AI reasoning logs (Claude thinking / Codex reasoning summaries) and tool logs are rendered as collapsible blocks and can be toggled on/off.
 - Non-conversational noise records (slash-command transcripts, injected environment context, Codex-internal subagent sessions) are filtered out automatically.
 - Filter by agent and time window.
+
+## JSON formats
+
+Machine-readable output for feeding logs to other AI agents or scripts — to summarize what was investigated, audit which commands ran, extract where things failed, or generate next actions. The goal is to make a past AI agent's work reusable by the next AI agent.
+
+| Format | Role | Use |
+|---|---|---|
+| `json` | **legacy** | Raw `UnifiedSession[]` array. Includes full tool output (large) and a flat structure that is awkward to hand to an AI. Kept for backward compatibility. |
+| `api-json` | Web UI shape | Same `{filters, summary, availableModels, projects}` as `/api/sessions`. Keeps the UI and CLI consistent. |
+| `agent-json` | Lightweight, AI-oriented | Restructures each session into `firstPrompt` / `conversation` / `toolCalls` (with `outputPreview` and `exitCode`). Token-efficient. |
+
+- `api-json` / `agent-json` support filtering that raw `json` does not: `--query` (full-text search), `--model`, and `--tool-name`.
+- `agent-json` controls tool output volume with `--tool-output preview|full|none` (`preview` truncates, `full` keeps everything, `none` omits it).
+- Use `tmp/` for `--out` exports, for example `--out tmp/sessions-agent.json`; `tmp/` is gitignored. Logs may contain sensitive data.
 
 ## Notes
 
