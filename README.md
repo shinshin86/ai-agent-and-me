@@ -1,5 +1,9 @@
 # AI Agent and Me
 
+<p align="center">
+  <img src="./assets/ai-agent-and-me-logo.png" alt="AI Agent and Me — a boy and a girl joining hands" width="860">
+</p>
+
 A CLI tool that aggregates local session logs from **Claude Code**, **Codex**, and **GitHub Copilot CLI** for a given repository (CWD), and renders them as a unified timeline.
 
 > 日本語版: [README.ja.md](./README.ja.md)

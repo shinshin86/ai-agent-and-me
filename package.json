@@ -18,7 +18,8 @@
   },
   "files": [
     "dist",
-    "README.md"
+    "README.md",
+    "assets/ai-agent-and-me-logo.png"
   ],
   "engines": {
     "node": ">=20"

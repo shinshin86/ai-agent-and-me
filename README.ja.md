@@ -1,5 +1,9 @@
 # AI Agent and Me
 
+<p align="center">
+  <img src="./assets/ai-agent-and-me-logo.png" alt="AI Agent and Me — 男の子と女の子が手を取り合うイラスト" width="860">
+</p>
+
 Claude Code / Codex / GitHub Copilot CLI のローカルセッションログを、指定したリポジトリ（CWD）単位で横断集約し、統合タイムラインとして表示する CLI ツール。
 
 > English: [README.md](./README.md)
